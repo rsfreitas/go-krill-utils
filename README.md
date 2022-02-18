@@ -1,6 +1,6 @@
 # golang krill-utils
 
-A collection of useful golang packages for the [krill](https://github.com/rsfreitas/micro) ecosystem.
+A collection of useful golang packages for the [krill](https://github.com/rsfreitas/krill) ecosystem.
 
 ## License
 
