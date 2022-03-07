@@ -1,6 +1,6 @@
-# golang krill-utils
+# golang pocket-utils
 
-A collection of useful golang packages for the [krill](https://github.com/rsfreitas/krill) ecosystem.
+A collection of useful golang packages for the [pocket](https://github.com/rsfreitas/pocket) ecosystem.
 
 ## License
 

@@ -1,4 +1,4 @@
-module github.com/rsfreitas/go-krill-utils
+module github.com/rsfreitas/go-pocket-utils
 
 go 1.16
 
