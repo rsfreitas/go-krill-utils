@@ -19,12 +19,12 @@ type Options struct {
 	// StrictValidators if enabled forces us to use the validator function
 	// for a template only if available. Otherwise, the template will be
 	// ignored.
-	StrictValidators  bool
-	UseFilenamePrefix bool
-	Plugin            *protogen.Plugin
-	Files             embed.FS        `validate:"required"`
-	Context           TemplateContext `validate:"required"`
-	HelperFunctions   map[string]interface{}
+	StrictValidators bool
+	Path             string
+	Plugin           *protogen.Plugin
+	Files            embed.FS        `validate:"required"`
+	Context          TemplateContext `validate:"required"`
+	HelperFunctions  map[string]interface{}
 }
 
 // TemplateContext is an interface that a template file context, i.e., the
@@ -39,12 +39,11 @@ type TemplateValidator func() bool
 // Templates is an object that holds information related to a group of
 // template files, allowing them to be parsed later.
 type Templates struct {
-	strictValidators  bool
-	useFilenamePrefix bool
-	path              string
-	prefix            string
-	context           TemplateContext
-	templates         []*Info
+	strictValidators bool
+	path             string
+	prefix           string
+	context          TemplateContext
+	templates        []*Info
 }
 
 type Info struct {
@@ -90,9 +89,18 @@ func (t *Templates) Execute() ([]*Generated, error) {
 		}
 
 		w.Flush()
+
+		filename := template.templateFilename
+		if t.path != "" {
+			filename = filepath.Join(t.path, fmt.Sprintf("%s.%s", t.prefix, template.templateFilename))
+		}
+		if t.context.Extension() != "" {
+			filename += fmt.Sprintf(".%s", t.context.Extension())
+		}
+
 		gen = append(gen, &Generated{
 			Data:         &buf,
-			Filename:     t.buildFilename(template.templateFilename),
+			Filename:     filename,
 			TemplateName: template.templateFilename,
 			Extension:    t.context.Extension(),
 		})
@@ -101,24 +109,6 @@ func (t *Templates) Execute() ([]*Generated, error) {
 	return gen, nil
 }
 
-func (t *Templates) buildFilename(templateFilename string) string {
-	filename := templateFilename
-
-	if t.path != "" {
-		filename = fmt.Sprintf("%s/%s", t.path, templateFilename)
-		if t.useFilenamePrefix {
-			filename = fmt.Sprintf("%s/%s.%s", t.path, t.prefix, templateFilename)
-		}
-	}
-	if t.context.Extension() != "" {
-		filename += fmt.Sprintf(".%s", t.context.Extension())
-	}
-
-	return filename
-}
-
-// LoadTemplates loads template files according the desired options and put them
-// ready to be executed.
 func LoadTemplates(options *Options) (*Templates, error) {
 	validate := validator.New()
 	if err := validate.Struct(options); err != nil {
@@ -137,6 +127,13 @@ func LoadTemplates(options *Options) (*Templates, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// filename should not have the version suffix.
+		filename = strings.TrimSuffix(filename, "v1")
+	}
+
+	if options.Path != "" {
+		path = options.Path
 	}
 
 	templates, err := options.Files.ReadDir(".")
@@ -144,10 +141,7 @@ func LoadTemplates(options *Options) (*Templates, error) {
 		return nil, err
 	}
 
-	var (
-		helperApi = buildDefaultHelperApi()
-		tpls      []*Info
-	)
+	var tpls []*Info
 
 	for _, t := range templates {
 		data, err := options.Files.ReadFile(t.Name())
@@ -155,6 +149,7 @@ func LoadTemplates(options *Options) (*Templates, error) {
 			return nil, err
 		}
 
+		helperApi := buildDefaultHelperApi()
 		basename := filenameWithoutExtension(t.Name())
 		helperApi["templateName"] = func() string {
 			return basename
@@ -172,12 +167,11 @@ func LoadTemplates(options *Options) (*Templates, error) {
 	}
 
 	return &Templates{
-		templates:         tpls,
-		path:              path,
-		prefix:            filename,
-		context:           options.Context,
-		strictValidators:  options.StrictValidators,
-		useFilenamePrefix: options.UseFilenamePrefix,
+		templates:        tpls,
+		path:             path,
+		prefix:           filename,
+		context:          options.Context,
+		strictValidators: options.StrictValidators,
 	}, nil
 }
 
@@ -188,12 +182,10 @@ func buildDefaultHelperApi() map[string]interface{} {
 			c := s[0]
 			return strings.ToLower(string(c))
 		},
-		"toSnake": strcase.ToSnake,
-		"toCamel": strcase.ToCamel,
-		"toKebab": strcase.ToKebab,
-		"trimSuffix": func(s, suffix string) string {
-			return strings.TrimSuffix(s, suffix)
-		},
+		"toSnake":     strcase.ToSnake,
+		"toCamelCase": strcase.ToCamel,
+		"toKebab":     strcase.ToKebab,
+		"trimSuffix":  strings.TrimSuffix,
 	}
 }
 
@@ -221,5 +213,12 @@ func GetPackageNameAndPath(plugin *protogen.Plugin) (string, string, error) {
 	// "compiled" by protoc.
 	file := plugin.Files[len(plugin.Files)-1]
 
-	return string(file.GoPackageName), filepath.Dir(file.GeneratedFilenamePrefix), nil
+	// Ensures that file is really one of our .proto files. Ir must have the
+	// "services/<module>/v1" prefix in its name.
+	if !strings.Contains(file.GeneratedFilenamePrefix, "services/") {
+		return "", "", fmt.Errorf("file '%s' is not a protobuf module", file.GeneratedFilenamePrefix)
+	}
+
+	path := strings.ReplaceAll(file.GoImportPath.String(), "\"", "")
+	return string(file.GoPackageName), path, nil
 }
