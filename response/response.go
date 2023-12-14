@@ -18,10 +18,14 @@ const (
 
 var contentTypeHeader = http.CanonicalHeaderKey("Content-Type")
 
-// Responser is a behavior that a struct may have to format its fields
+// ResponserFasthttp is a behavior that a struct may have to format its fields
 // in case of an HTTP response.
-type Responser interface {
+type ResponserFasthttp interface {
 	HttpResponse() interface{}
+}
+
+type ResponserEcho interface {
+	HttpResponseBytes() ([]byte, error)
 }
 
 type Response struct {
@@ -111,21 +115,36 @@ func (r *Response) ForwardError(err error) error {
 }
 
 func (r *Response) ForwardSuccess(data interface{}) error {
-	// Does the message have another format to send as response?
-	if h, ok := data.(Responser); ok {
-		data = h.HttpResponse()
+	if _, ok := r.ctx.(*fasthttp.RequestCtx); ok {
+		// Does the message have another format to send as response?
+		if h, ok := data.(ResponserFasthttp); ok {
+			data = h.HttpResponse()
+		}
+
+		return r.forwardOutput(fasthttp.StatusOK, data)
 	}
 
-	return r.forwardOutput(fasthttp.StatusOK, data)
+	if _, ok := r.ctx.(echo.Context); ok {
+		if h, ok := data.(ResponserEcho); ok {
+			b, err := h.HttpResponseBytes()
+			if err != nil {
+				return err
+			}
+
+			return r.forwardOutput(fasthttp.StatusOK, string(b))
+		}
+	}
+
+	return nil
 }
 
 func (r *Response) forwardOutput(statusCode int, data interface{}) error {
-	out, err := json.Marshal(data)
-	if err != nil {
-		return r.ForwardError(err)
-	}
-
 	if fctx, ok := r.ctx.(*fasthttp.RequestCtx); ok {
+		out, err := json.Marshal(data)
+		if err != nil {
+			return r.ForwardError(err)
+		}
+
 		r.setFasthttpCustomHeaders(fctx)
 
 		if v := fctx.UserValue(customResponseCode); v != nil {
@@ -147,8 +166,16 @@ func (r *Response) forwardOutput(statusCode int, data interface{}) error {
 		}
 
 		ectx.Response().Header().Set("Content-Type", r.contentType)
+		out, ok := data.(string)
+		if !ok {
+			b, err := json.Marshal(data)
+			if err != nil {
+				return r.ForwardError(err)
+			}
+			out = string(b)
+		}
 
-		if err := ectx.JSON(statusCode, out); err != nil {
+		if err := ectx.String(statusCode, out); err != nil {
 			return err
 		}
 	}
